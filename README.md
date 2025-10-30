@@ -2,5 +2,5 @@
 
 Auto-generated Go bindings with buf.validate support.
 
-Generated: 2025-10-30 10:28:01 UTC
-Commit: 96eb8f00a4e8b82513783b4f9fccce6c33c6fc19
+Generated: 2025-10-30 17:08:09 UTC
+Commit: 358fa49b3d8be1792251b5c47c0ebf66ca2fb2a4

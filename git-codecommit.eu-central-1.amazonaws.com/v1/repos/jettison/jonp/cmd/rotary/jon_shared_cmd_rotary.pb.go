@@ -52,6 +52,7 @@ type Root struct {
 	//	*Root_ScanUpdateNode
 	//	*Root_ScanAddNode
 	//	*Root_HaltWithNdc
+	//	*Root_SetSpiritLevel
 	Cmd           isRoot_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -319,6 +320,15 @@ func (x *Root) GetHaltWithNdc() *HaltWithNDC {
 	return nil
 }
 
+func (x *Root) GetSetSpiritLevel() *SetSpiritLevel {
+	if x != nil {
+		if x, ok := x.Cmd.(*Root_SetSpiritLevel); ok {
+			return x.SetSpiritLevel
+		}
+	}
+	return nil
+}
+
 type isRoot_Cmd interface {
 	isRoot_Cmd()
 }
@@ -423,6 +433,10 @@ type Root_HaltWithNdc struct {
 	HaltWithNdc *HaltWithNDC `protobuf:"bytes,25,opt,name=halt_with_ndc,json=haltWithNdc,proto3,oneof"`
 }
 
+type Root_SetSpiritLevel struct {
+	SetSpiritLevel *SetSpiritLevel `protobuf:"bytes,26,opt,name=set_spirit_level,json=setSpiritLevel,proto3,oneof"`
+}
+
 func (*Root_Start) isRoot_Cmd() {}
 
 func (*Root_Stop) isRoot_Cmd() {}
@@ -472,6 +486,8 @@ func (*Root_ScanUpdateNode) isRoot_Cmd() {}
 func (*Root_ScanAddNode) isRoot_Cmd() {}
 
 func (*Root_HaltWithNdc) isRoot_Cmd() {}
+
+func (*Root_SetSpiritLevel) isRoot_Cmd() {}
 
 type Axis struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2587,11 +2603,83 @@ func (x *HaltWithNDC) GetStateTime() uint64 {
 	return 0
 }
 
+type SetSpiritLevel struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// elevation correction fot the rotary
+	Pitch float64 `protobuf:"fixed64,1,opt,name=pitch,proto3" json:"pitch,omitempty"`
+	// bank correction for the rotary
+	Roll float64 `protobuf:"fixed64,2,opt,name=roll,proto3" json:"roll,omitempty"`
+	// offset pan of the rotary
+	PanOffset float64 `protobuf:"fixed64,3,opt,name=pan_offset,json=panOffset,proto3" json:"pan_offset,omitempty"`
+	// offset tilt for the rotary
+	TiltOffset    float64 `protobuf:"fixed64,4,opt,name=tilt_offset,json=tiltOffset,proto3" json:"tilt_offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSpiritLevel) Reset() {
+	*x = SetSpiritLevel{}
+	mi := &file_jon_shared_cmd_rotary_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSpiritLevel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSpiritLevel) ProtoMessage() {}
+
+func (x *SetSpiritLevel) ProtoReflect() protoreflect.Message {
+	mi := &file_jon_shared_cmd_rotary_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSpiritLevel.ProtoReflect.Descriptor instead.
+func (*SetSpiritLevel) Descriptor() ([]byte, []int) {
+	return file_jon_shared_cmd_rotary_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *SetSpiritLevel) GetPitch() float64 {
+	if x != nil {
+		return x.Pitch
+	}
+	return 0
+}
+
+func (x *SetSpiritLevel) GetRoll() float64 {
+	if x != nil {
+		return x.Roll
+	}
+	return 0
+}
+
+func (x *SetSpiritLevel) GetPanOffset() float64 {
+	if x != nil {
+		return x.PanOffset
+	}
+	return 0
+}
+
+func (x *SetSpiritLevel) GetTiltOffset() float64 {
+	if x != nil {
+		return x.TiltOffset
+	}
+	return 0
+}
+
 var File_jon_shared_cmd_rotary_proto protoreflect.FileDescriptor
 
 const file_jon_shared_cmd_rotary_proto_rawDesc = "" +
 	"\n" +
-	"\x1bjon_shared_cmd_rotary.proto\x12\x12cmd.RotaryPlatform\x1a\x1bbuf/validate/validate.proto\x1a\x1bjon_shared_data_types.proto\"\xf9\r\n" +
+	"\x1bjon_shared_cmd_rotary.proto\x12\x12cmd.RotaryPlatform\x1a\x1bbuf/validate/validate.proto\x1a\x1bjon_shared_data_types.proto\"\xc9\x0e\n" +
 	"\x04Root\x121\n" +
 	"\x05start\x18\x01 \x01(\v2\x19.cmd.RotaryPlatform.StartH\x00R\x05start\x12.\n" +
 	"\x04stop\x18\x02 \x01(\v2\x18.cmd.RotaryPlatform.StopH\x00R\x04stop\x12.\n" +
@@ -2620,7 +2708,8 @@ const file_jon_shared_cmd_rotary_proto_rawDesc = "" +
 	"\x10scan_delete_node\x18\x16 \x01(\v2\".cmd.RotaryPlatform.ScanDeleteNodeH\x00R\x0escanDeleteNode\x12N\n" +
 	"\x10scan_update_node\x18\x17 \x01(\v2\".cmd.RotaryPlatform.ScanUpdateNodeH\x00R\x0escanUpdateNode\x12E\n" +
 	"\rscan_add_node\x18\x18 \x01(\v2\x1f.cmd.RotaryPlatform.ScanAddNodeH\x00R\vscanAddNode\x12E\n" +
-	"\rhalt_with_ndc\x18\x19 \x01(\v2\x1f.cmd.RotaryPlatform.HaltWithNDCH\x00R\vhaltWithNdcB\f\n" +
+	"\rhalt_with_ndc\x18\x19 \x01(\v2\x1f.cmd.RotaryPlatform.HaltWithNDCH\x00R\vhaltWithNdc\x12N\n" +
+	"\x10set_spirit_level\x18\x1a \x01(\v2\".cmd.RotaryPlatform.SetSpiritLevelH\x00R\x0esetSpiritLevelB\f\n" +
 	"\x03cmd\x12\x05\xbaH\x02\b\x01\"z\n" +
 	"\x04Axis\x125\n" +
 	"\aazimuth\x18\x01 \x01(\v2\x1b.cmd.RotaryPlatform.AzimuthR\aazimuth\x12;\n" +
@@ -2754,7 +2843,14 @@ const file_jon_shared_cmd_rotary_proto_rawDesc = "" +
 	"\n" +
 	"frame_time\x18\x04 \x01(\x04R\tframeTime\x12\x1d\n" +
 	"\n" +
-	"state_time\x18\x05 \x01(\x04R\tstateTimeB\xe7\x01\n" +
+	"state_time\x18\x05 \x01(\x04R\tstateTime\"\xde\x01\n" +
+	"\x0eSetSpiritLevel\x12-\n" +
+	"\x05pitch\x18\x01 \x01(\x01B\x17\xbaH\x14\x12\x12\x19\x00\x00\x00\x00\x00\x80V@)\x00\x00\x00\x00\x00\x80V\xc0R\x05pitch\x12+\n" +
+	"\x04roll\x18\x02 \x01(\x01B\x17\xbaH\x14\x12\x12\x19\x00\x00\x00\x00\x00\x80V@)\x00\x00\x00\x00\x00\x80V\xc0R\x04roll\x126\n" +
+	"\n" +
+	"pan_offset\x18\x03 \x01(\x01B\x17\xbaH\x14\x12\x12\x19\x00\x00\x00\x00\x00\x80f@)\x00\x00\x00\x00\x00\x80f\xc0R\tpanOffset\x128\n" +
+	"\vtilt_offset\x18\x04 \x01(\x01B\x17\xbaH\x14\x12\x12\x19\x00\x00\x00\x00\x00\x80V@)\x00\x00\x00\x00\x00\x80V\xc0R\n" +
+	"tiltOffsetB\xe7\x01\n" +
 	"\x16com.cmd.RotaryPlatformB\x17JonSharedCmdRotaryProtoP\x01ZKgit-codecommit.eu-central-1.amazonaws.com/v1/repos/jettison/jonp/cmd/rotary\xa2\x02\x03CRX\xaa\x02\x12Cmd.RotaryPlatform\xca\x02\x12Cmd\\RotaryPlatform\xe2\x02\x1eCmd\\RotaryPlatform\\GPBMetadata\xea\x02\x13Cmd::RotaryPlatformb\x06proto3"
 
 var (
@@ -2769,7 +2865,7 @@ func file_jon_shared_cmd_rotary_proto_rawDescGZIP() []byte {
 	return file_jon_shared_cmd_rotary_proto_rawDescData
 }
 
-var file_jon_shared_cmd_rotary_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_jon_shared_cmd_rotary_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_jon_shared_cmd_rotary_proto_goTypes = []any{
 	(*Root)(nil),                         // 0: cmd.RotaryPlatform.Root
 	(*Axis)(nil),                         // 1: cmd.RotaryPlatform.Axis
@@ -2811,9 +2907,10 @@ var file_jon_shared_cmd_rotary_proto_goTypes = []any{
 	(*SetOriginGPS)(nil),                 // 37: cmd.RotaryPlatform.SetOriginGPS
 	(*RotateToNDC)(nil),                  // 38: cmd.RotaryPlatform.RotateToNDC
 	(*HaltWithNDC)(nil),                  // 39: cmd.RotaryPlatform.HaltWithNDC
-	(types.JonGuiDataRotaryMode)(0),      // 40: ser.JonGuiDataRotaryMode
-	(types.JonGuiDataRotaryDirection)(0), // 41: ser.JonGuiDataRotaryDirection
-	(types.JonGuiDataVideoChannel)(0),    // 42: ser.JonGuiDataVideoChannel
+	(*SetSpiritLevel)(nil),               // 40: cmd.RotaryPlatform.SetSpiritLevel
+	(types.JonGuiDataRotaryMode)(0),      // 41: ser.JonGuiDataRotaryMode
+	(types.JonGuiDataRotaryDirection)(0), // 42: ser.JonGuiDataRotaryDirection
+	(types.JonGuiDataVideoChannel)(0),    // 43: ser.JonGuiDataVideoChannel
 }
 var file_jon_shared_cmd_rotary_proto_depIdxs = []int32{
 	18, // 0: cmd.RotaryPlatform.Root.start:type_name -> cmd.RotaryPlatform.Start
@@ -2841,36 +2938,37 @@ var file_jon_shared_cmd_rotary_proto_depIdxs = []int32{
 	32, // 22: cmd.RotaryPlatform.Root.scan_update_node:type_name -> cmd.RotaryPlatform.ScanUpdateNode
 	33, // 23: cmd.RotaryPlatform.Root.scan_add_node:type_name -> cmd.RotaryPlatform.ScanAddNode
 	39, // 24: cmd.RotaryPlatform.Root.halt_with_ndc:type_name -> cmd.RotaryPlatform.HaltWithNDC
-	17, // 25: cmd.RotaryPlatform.Axis.azimuth:type_name -> cmd.RotaryPlatform.Azimuth
-	34, // 26: cmd.RotaryPlatform.Axis.elevation:type_name -> cmd.RotaryPlatform.Elevation
-	40, // 27: cmd.RotaryPlatform.SetMode.mode:type_name -> ser.JonGuiDataRotaryMode
-	41, // 28: cmd.RotaryPlatform.SetAzimuthValue.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 29: cmd.RotaryPlatform.RotateAzimuthTo.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 30: cmd.RotaryPlatform.RotateAzimuth.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 31: cmd.RotaryPlatform.RotateElevation.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 32: cmd.RotaryPlatform.RotateElevationRelative.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 33: cmd.RotaryPlatform.RotateElevationRelativeSet.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 34: cmd.RotaryPlatform.RotateAzimuthRelative.direction:type_name -> ser.JonGuiDataRotaryDirection
-	41, // 35: cmd.RotaryPlatform.RotateAzimuthRelativeSet.direction:type_name -> ser.JonGuiDataRotaryDirection
-	3,  // 36: cmd.RotaryPlatform.Azimuth.set_value:type_name -> cmd.RotaryPlatform.SetAzimuthValue
-	4,  // 37: cmd.RotaryPlatform.Azimuth.rotate_to:type_name -> cmd.RotaryPlatform.RotateAzimuthTo
-	5,  // 38: cmd.RotaryPlatform.Azimuth.rotate:type_name -> cmd.RotaryPlatform.RotateAzimuth
-	11, // 39: cmd.RotaryPlatform.Azimuth.relative:type_name -> cmd.RotaryPlatform.RotateAzimuthRelative
-	12, // 40: cmd.RotaryPlatform.Azimuth.relative_set:type_name -> cmd.RotaryPlatform.RotateAzimuthRelativeSet
-	25, // 41: cmd.RotaryPlatform.Azimuth.halt:type_name -> cmd.RotaryPlatform.HaltAzimuth
-	7,  // 42: cmd.RotaryPlatform.Elevation.set_value:type_name -> cmd.RotaryPlatform.SetElevationValue
-	8,  // 43: cmd.RotaryPlatform.Elevation.rotate_to:type_name -> cmd.RotaryPlatform.RotateElevationTo
-	6,  // 44: cmd.RotaryPlatform.Elevation.rotate:type_name -> cmd.RotaryPlatform.RotateElevation
-	9,  // 45: cmd.RotaryPlatform.Elevation.relative:type_name -> cmd.RotaryPlatform.RotateElevationRelative
-	10, // 46: cmd.RotaryPlatform.Elevation.relative_set:type_name -> cmd.RotaryPlatform.RotateElevationRelativeSet
-	26, // 47: cmd.RotaryPlatform.Elevation.halt:type_name -> cmd.RotaryPlatform.HaltElevation
-	42, // 48: cmd.RotaryPlatform.RotateToNDC.channel:type_name -> ser.JonGuiDataVideoChannel
-	42, // 49: cmd.RotaryPlatform.HaltWithNDC.channel:type_name -> ser.JonGuiDataVideoChannel
-	50, // [50:50] is the sub-list for method output_type
-	50, // [50:50] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	40, // 25: cmd.RotaryPlatform.Root.set_spirit_level:type_name -> cmd.RotaryPlatform.SetSpiritLevel
+	17, // 26: cmd.RotaryPlatform.Axis.azimuth:type_name -> cmd.RotaryPlatform.Azimuth
+	34, // 27: cmd.RotaryPlatform.Axis.elevation:type_name -> cmd.RotaryPlatform.Elevation
+	41, // 28: cmd.RotaryPlatform.SetMode.mode:type_name -> ser.JonGuiDataRotaryMode
+	42, // 29: cmd.RotaryPlatform.SetAzimuthValue.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 30: cmd.RotaryPlatform.RotateAzimuthTo.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 31: cmd.RotaryPlatform.RotateAzimuth.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 32: cmd.RotaryPlatform.RotateElevation.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 33: cmd.RotaryPlatform.RotateElevationRelative.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 34: cmd.RotaryPlatform.RotateElevationRelativeSet.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 35: cmd.RotaryPlatform.RotateAzimuthRelative.direction:type_name -> ser.JonGuiDataRotaryDirection
+	42, // 36: cmd.RotaryPlatform.RotateAzimuthRelativeSet.direction:type_name -> ser.JonGuiDataRotaryDirection
+	3,  // 37: cmd.RotaryPlatform.Azimuth.set_value:type_name -> cmd.RotaryPlatform.SetAzimuthValue
+	4,  // 38: cmd.RotaryPlatform.Azimuth.rotate_to:type_name -> cmd.RotaryPlatform.RotateAzimuthTo
+	5,  // 39: cmd.RotaryPlatform.Azimuth.rotate:type_name -> cmd.RotaryPlatform.RotateAzimuth
+	11, // 40: cmd.RotaryPlatform.Azimuth.relative:type_name -> cmd.RotaryPlatform.RotateAzimuthRelative
+	12, // 41: cmd.RotaryPlatform.Azimuth.relative_set:type_name -> cmd.RotaryPlatform.RotateAzimuthRelativeSet
+	25, // 42: cmd.RotaryPlatform.Azimuth.halt:type_name -> cmd.RotaryPlatform.HaltAzimuth
+	7,  // 43: cmd.RotaryPlatform.Elevation.set_value:type_name -> cmd.RotaryPlatform.SetElevationValue
+	8,  // 44: cmd.RotaryPlatform.Elevation.rotate_to:type_name -> cmd.RotaryPlatform.RotateElevationTo
+	6,  // 45: cmd.RotaryPlatform.Elevation.rotate:type_name -> cmd.RotaryPlatform.RotateElevation
+	9,  // 46: cmd.RotaryPlatform.Elevation.relative:type_name -> cmd.RotaryPlatform.RotateElevationRelative
+	10, // 47: cmd.RotaryPlatform.Elevation.relative_set:type_name -> cmd.RotaryPlatform.RotateElevationRelativeSet
+	26, // 48: cmd.RotaryPlatform.Elevation.halt:type_name -> cmd.RotaryPlatform.HaltElevation
+	43, // 49: cmd.RotaryPlatform.RotateToNDC.channel:type_name -> ser.JonGuiDataVideoChannel
+	43, // 50: cmd.RotaryPlatform.HaltWithNDC.channel:type_name -> ser.JonGuiDataVideoChannel
+	51, // [51:51] is the sub-list for method output_type
+	51, // [51:51] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_jon_shared_cmd_rotary_proto_init() }
@@ -2904,6 +3002,7 @@ func file_jon_shared_cmd_rotary_proto_init() {
 		(*Root_ScanUpdateNode)(nil),
 		(*Root_ScanAddNode)(nil),
 		(*Root_HaltWithNdc)(nil),
+		(*Root_SetSpiritLevel)(nil),
 	}
 	file_jon_shared_cmd_rotary_proto_msgTypes[17].OneofWrappers = []any{
 		(*Azimuth_SetValue)(nil),
@@ -2927,7 +3026,7 @@ func file_jon_shared_cmd_rotary_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jon_shared_cmd_rotary_proto_rawDesc), len(file_jon_shared_cmd_rotary_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   40,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
