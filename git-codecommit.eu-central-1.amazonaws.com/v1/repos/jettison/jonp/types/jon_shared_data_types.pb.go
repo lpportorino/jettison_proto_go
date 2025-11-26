@@ -1033,6 +1033,58 @@ func (JonGuiDataClientType) EnumDescriptor() ([]byte, []int) {
 	return file_jon_shared_data_types_proto_rawDescGZIP(), []int{17}
 }
 
+type JonGuiDataExtBatStatus int32
+
+const (
+	JonGuiDataExtBatStatus_JON_GUI_DATA_EXT_BAT_STATUS_UNSPECIFIED JonGuiDataExtBatStatus = 0
+	JonGuiDataExtBatStatus_JON_GUI_DATA_EXT_BAT_STATUS_CHARGING    JonGuiDataExtBatStatus = 1
+	JonGuiDataExtBatStatus_JON_GUI_DATA_EXT_BAT_STATUS_DISCHARGING JonGuiDataExtBatStatus = 2
+	JonGuiDataExtBatStatus_JON_GUI_DATA_EXT_BAT_STATUS_BALANCING   JonGuiDataExtBatStatus = 3
+)
+
+// Enum value maps for JonGuiDataExtBatStatus.
+var (
+	JonGuiDataExtBatStatus_name = map[int32]string{
+		0: "JON_GUI_DATA_EXT_BAT_STATUS_UNSPECIFIED",
+		1: "JON_GUI_DATA_EXT_BAT_STATUS_CHARGING",
+		2: "JON_GUI_DATA_EXT_BAT_STATUS_DISCHARGING",
+		3: "JON_GUI_DATA_EXT_BAT_STATUS_BALANCING",
+	}
+	JonGuiDataExtBatStatus_value = map[string]int32{
+		"JON_GUI_DATA_EXT_BAT_STATUS_UNSPECIFIED": 0,
+		"JON_GUI_DATA_EXT_BAT_STATUS_CHARGING":    1,
+		"JON_GUI_DATA_EXT_BAT_STATUS_DISCHARGING": 2,
+		"JON_GUI_DATA_EXT_BAT_STATUS_BALANCING":   3,
+	}
+)
+
+func (x JonGuiDataExtBatStatus) Enum() *JonGuiDataExtBatStatus {
+	p := new(JonGuiDataExtBatStatus)
+	*p = x
+	return p
+}
+
+func (x JonGuiDataExtBatStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (JonGuiDataExtBatStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_jon_shared_data_types_proto_enumTypes[18].Descriptor()
+}
+
+func (JonGuiDataExtBatStatus) Type() protoreflect.EnumType {
+	return &file_jon_shared_data_types_proto_enumTypes[18]
+}
+
+func (x JonGuiDataExtBatStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use JonGuiDataExtBatStatus.Descriptor instead.
+func (JonGuiDataExtBatStatus) EnumDescriptor() ([]byte, []int) {
+	return file_jon_shared_data_types_proto_rawDescGZIP(), []int{18}
+}
+
 type JonGuiDataMeteo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Temperature   float64                `protobuf:"fixed64,1,opt,name=temperature,proto3" json:"temperature,omitempty"`
@@ -1217,7 +1269,12 @@ const file_jon_shared_data_types_proto_rawDesc = "" +
 	"$JON_GUI_DATA_CLIENT_TYPE_INTERNAL_CV\x10\x01\x12*\n" +
 	"&JON_GUI_DATA_CLIENT_TYPE_LOCAL_NETWORK\x10\x02\x122\n" +
 	".JON_GUI_DATA_CLIENT_TYPE_CERTIFICATE_PROTECTED\x10\x03\x12!\n" +
-	"\x1dJON_GUI_DATA_CLIENT_TYPE_LIRA\x10\x04B\x96\x01\n" +
+	"\x1dJON_GUI_DATA_CLIENT_TYPE_LIRA\x10\x04*\xc7\x01\n" +
+	"\x16JonGuiDataExtBatStatus\x12+\n" +
+	"'JON_GUI_DATA_EXT_BAT_STATUS_UNSPECIFIED\x10\x00\x12(\n" +
+	"$JON_GUI_DATA_EXT_BAT_STATUS_CHARGING\x10\x01\x12+\n" +
+	"'JON_GUI_DATA_EXT_BAT_STATUS_DISCHARGING\x10\x02\x12)\n" +
+	"%JON_GUI_DATA_EXT_BAT_STATUS_BALANCING\x10\x03B\x96\x01\n" +
 	"\acom.serB\x17JonSharedDataTypesProtoP\x01ZFgit-codecommit.eu-central-1.amazonaws.com/v1/repos/jettison/jonp/types\xa2\x02\x03SXX\xaa\x02\x03Ser\xca\x02\x03Ser\xe2\x02\x0fSer\\GPBMetadata\xea\x02\x03Serb\x06proto3"
 
 var (
@@ -1232,7 +1289,7 @@ func file_jon_shared_data_types_proto_rawDescGZIP() []byte {
 	return file_jon_shared_data_types_proto_rawDescData
 }
 
-var file_jon_shared_data_types_proto_enumTypes = make([]protoimpl.EnumInfo, 18)
+var file_jon_shared_data_types_proto_enumTypes = make([]protoimpl.EnumInfo, 19)
 var file_jon_shared_data_types_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_jon_shared_data_types_proto_goTypes = []any{
 	(JonGuiDataVideoChannelHeatFilters)(0),  // 0: ser.JonGuiDataVideoChannelHeatFilters
@@ -1253,7 +1310,8 @@ var file_jon_shared_data_types_proto_goTypes = []any{
 	(JonGuiDataFxModeHeat)(0),               // 15: ser.JonGuiDataFxModeHeat
 	(JonGuiDataSystemLocalizations)(0),      // 16: ser.JonGuiDataSystemLocalizations
 	(JonGuiDataClientType)(0),               // 17: ser.JonGuiDataClientType
-	(*JonGuiDataMeteo)(nil),                 // 18: ser.JonGuiDataMeteo
+	(JonGuiDataExtBatStatus)(0),             // 18: ser.JonGuiDataExtBatStatus
+	(*JonGuiDataMeteo)(nil),                 // 19: ser.JonGuiDataMeteo
 }
 var file_jon_shared_data_types_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -1273,7 +1331,7 @@ func file_jon_shared_data_types_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jon_shared_data_types_proto_rawDesc), len(file_jon_shared_data_types_proto_rawDesc)),
-			NumEnums:      18,
+			NumEnums:      19,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
