@@ -457,18 +457,13 @@ func (*DisableAutomaticControl) Descriptor() ([]byte, []int) {
 }
 
 // AutomaticControlChannelParams contains automatic regulation parameters for a single heater channel
+// Note: PID gains (kp, ki, kd) are loaded from Redis config_editor, not sent via command
 type AutomaticControlChannelParams struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Target temperature in Celsius
+	// Target temperature in Celsius (persisted via manifold state storage)
 	TargetTemperature float32 `protobuf:"fixed32,1,opt,name=target_temperature,json=targetTemperature,proto3" json:"target_temperature,omitempty"`
-	// Proportional gain
-	Kp float32 `protobuf:"fixed32,2,opt,name=kp,proto3" json:"kp,omitempty"`
-	// Integral gain
-	Ki float32 `protobuf:"fixed32,3,opt,name=ki,proto3" json:"ki,omitempty"`
-	// Derivative gain
-	Kd            float32 `protobuf:"fixed32,4,opt,name=kd,proto3" json:"kd,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AutomaticControlChannelParams) Reset() {
@@ -504,27 +499,6 @@ func (*AutomaticControlChannelParams) Descriptor() ([]byte, []int) {
 func (x *AutomaticControlChannelParams) GetTargetTemperature() float32 {
 	if x != nil {
 		return x.TargetTemperature
-	}
-	return 0
-}
-
-func (x *AutomaticControlChannelParams) GetKp() float32 {
-	if x != nil {
-		return x.Kp
-	}
-	return 0
-}
-
-func (x *AutomaticControlChannelParams) GetKi() float32 {
-	if x != nil {
-		return x.Ki
-	}
-	return 0
-}
-
-func (x *AutomaticControlChannelParams) GetKd() float32 {
-	if x != nil {
-		return x.Kd
 	}
 	return 0
 }
@@ -634,20 +608,11 @@ const file_jon_shared_cmd_heater_proto_rawDesc = "" +
 	"tempError2\"\v\n" +
 	"\tGetStatus\"\x18\n" +
 	"\x16EnableAutomaticControl\"\x19\n" +
-	"\x17DisableAutomaticControl\"\xb3\x01\n" +
+	"\x17DisableAutomaticControl\"_\n" +
 	"\x1dAutomaticControlChannelParams\x12>\n" +
 	"\x12target_temperature\x18\x01 \x01(\x02B\x0f\xbaH\f\n" +
 	"\n" +
-	"\x1d\x00\x00\xc8B-\x00\x00\x00\x00R\x11targetTemperature\x12\x1a\n" +
-	"\x02kp\x18\x02 \x01(\x02B\n" +
-	"\xbaH\a\n" +
-	"\x05-\x00\x00\x00\x00R\x02kp\x12\x1a\n" +
-	"\x02ki\x18\x03 \x01(\x02B\n" +
-	"\xbaH\a\n" +
-	"\x05-\x00\x00\x00\x00R\x02ki\x12\x1a\n" +
-	"\x02kd\x18\x04 \x01(\x02B\n" +
-	"\xbaH\a\n" +
-	"\x05-\x00\x00\x00\x00R\x02kd\"\xf3\x01\n" +
+	"\x1d\x00\x00pB-\x00\x00\x00\x00R\x11targetTemperature\"\xf3\x01\n" +
 	"\x19SetAutomaticControlParams\x12F\n" +
 	"\tchannel_0\x18\x01 \x01(\v2).cmd.Heater.AutomaticControlChannelParamsR\bchannel0\x12F\n" +
 	"\tchannel_1\x18\x02 \x01(\v2).cmd.Heater.AutomaticControlChannelParamsR\bchannel1\x12F\n" +
