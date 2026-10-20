@@ -179,6 +179,13 @@ func (ArchiveCodec) EnumDescriptor() ([]byte, []int) {
 // Groups are ordered by this value so every group of one kind is CONTIGUOUS in
 // the encoded archive — the property a future codec needs, since a homogeneous
 // byte run is what compresses.
+//
+// Every kind except STREAM_KIND_TSDB_TABLE is a REDIS-STREAM kind: its source
+// is a stream key on the LOGS redis and its payload is RedisStreamRecords.
+// STREAM_KIND_TSDB_TABLE alone is a table slice. The comments on StreamGroup,
+// RedisStreamRecords and TableRows refer to the kinds by that split, never by
+// a numeric range, so a new redis-stream kind is declared here and nowhere
+// else.
 type StreamKind int32
 
 const (
@@ -201,6 +208,26 @@ const (
 	// posts), each record's payload a self-verifying mh wire image
 	// (crc32c ‖ seq_abs ‖ MhEntry). payload is RedisStreamRecords.
 	StreamKind_STREAM_KIND_MOTION_HISTORY StreamKind = 5
+	// `logs:gige:<channel>` on the LOGS redis (db 6) — the GigE camera link's
+	// trace records at the `control` and `frames` trace levels. BOTH ends write
+	// into the same per-channel stream: the receiver on the Orin (gige-ingress,
+	// inside the sensor harness) and the camera-side sender (gige-device: the
+	// twin, later the head). The record's own header says which side wrote it,
+	// never the stream. Each entry carries ONE encoded record, field `rec`, in
+	// the `JGTR` record format (authority mods/gige/crates/gige-wire/src/trace.rs,
+	// C mirror inc/gige/gige_trace.h). One group per channel stream key. payload
+	// is RedisStreamRecords.
+	//
+	// The writer trims each stream approximately (XADD MAXLEN ~), so a window
+	// longer than the stream holds loses its HEAD to the trim before the harvest
+	// reads it, and the group's `truncated` flag does NOT report that loss — it
+	// reports only the harvester's own per-source cap.
+	//
+	// The `packets` trace level never reaches redis; its ring files are carried
+	// as CvDumpArchive.gige_packet_rings. Nor does the day channel's `stats`
+	// record (gige_trace.stats); its ring is carried as
+	// CvDumpArchive.gige_stats_rings.
+	StreamKind_STREAM_KIND_GIGE StreamKind = 6
 )
 
 // Enum value maps for StreamKind.
@@ -212,6 +239,7 @@ var (
 		3: "STREAM_KIND_FRAME_TAP",
 		4: "STREAM_KIND_TSDB_TABLE",
 		5: "STREAM_KIND_MOTION_HISTORY",
+		6: "STREAM_KIND_GIGE",
 	}
 	StreamKind_value = map[string]int32{
 		"STREAM_KIND_UNSPECIFIED":    0,
@@ -220,6 +248,7 @@ var (
 		"STREAM_KIND_FRAME_TAP":      3,
 		"STREAM_KIND_TSDB_TABLE":     4,
 		"STREAM_KIND_MOTION_HISTORY": 5,
+		"STREAM_KIND_GIGE":           6,
 	}
 )
 
@@ -417,9 +446,26 @@ type CvDumpArchive struct {
 	// provenance here. ONE ENTRY PER PROMISED CHANNEL, the VideoChannel rule — a
 	// channel that captured nothing appears with no planes and a reason. Empty
 	// on a capture-window bundle; a photo bundle has empty video + streams.
-	Shots         []*ShotCapture `protobuf:"bytes,11,rep,name=shots,proto3" json:"shots,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Shots []*ShotCapture `protobuf:"bytes,11,rep,name=shots,proto3" json:"shots,omitempty"`
+	// The GigE camera link's `packets` trace level: one compacted ring file per
+	// channel under `gige/`, described here. ONE ENTRY PER CHANNEL WHOSE RING
+	// THE HARVESTER LOOKED FOR, the VideoChannel rule — a channel with no ring
+	// file appears with zero records and an absent_reason rather than being
+	// dropped. The ring BYTES are files, like the video segments; this is their
+	// inventory plus what the harvest discarded and why. The `control` and
+	// `frames` levels travel as STREAM_KIND_GIGE groups in `streams`.
+	GigePacketRings []*GigePacketRing `protobuf:"bytes,12,rep,name=gige_packet_rings,json=gigePacketRings,proto3" json:"gige_packet_rings,omitempty"`
+	// The GigE camera link's `stats` trace: one compacted ring file per channel
+	// under `gige/`, described here, each record one frame's MAX10 statistics
+	// chunks beside the ISP statistics the harness published for the same
+	// frame. ONE ENTRY PER CHANNEL WHOSE RING THE HARVESTER LOOKED FOR, the
+	// VideoChannel rule — a channel with no ring file (heat has none at all)
+	// appears with zero records and an absent_reason rather than being
+	// dropped. The ring BYTES are files; this is their inventory plus what the
+	// harvest discarded and why.
+	GigeStatsRings []*GigeStatsRing `protobuf:"bytes,13,rep,name=gige_stats_rings,json=gigeStatsRings,proto3" json:"gige_stats_rings,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CvDumpArchive) Reset() {
@@ -525,6 +571,20 @@ func (x *CvDumpArchive) GetStreams() []*StreamGroup {
 func (x *CvDumpArchive) GetShots() []*ShotCapture {
 	if x != nil {
 		return x.Shots
+	}
+	return nil
+}
+
+func (x *CvDumpArchive) GetGigePacketRings() []*GigePacketRing {
+	if x != nil {
+		return x.GigePacketRings
+	}
+	return nil
+}
+
+func (x *CvDumpArchive) GetGigeStatsRings() []*GigeStatsRing {
+	if x != nil {
+		return x.GigeStatsRings
 	}
 	return nil
 }
@@ -1151,8 +1211,25 @@ type IntegrityReport struct {
 	// XRANGE error). Distinct from lapped_segments so a redis fault is never
 	// reported as lost video.
 	IoRecordsIncomplete bool `protobuf:"varint,10,opt,name=io_records_incomplete,json=ioRecordsIncomplete,proto3" json:"io_records_incomplete,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// A GigE packet ring file that EXISTED could not be read or failed
+	// validation — bad magic, version or record length in its header, or a
+	// record kept for the window that does not decode — so the window's packet
+	// trace is unrecoverable later, and this IS partial. The refused channel's
+	// GigePacketRing carries the reason too. A ring that does not exist (no file
+	// on the box, the `packets` level never armed) does NOT set this flag: it is
+	// recorded only as that channel's GigePacketRing.absent_reason.
+	GigePacketRingsIncomplete bool `protobuf:"varint,11,opt,name=gige_packet_rings_incomplete,json=gigePacketRingsIncomplete,proto3" json:"gige_packet_rings_incomplete,omitempty"`
+	// A GigE stats ring file that EXISTED could not be read or failed
+	// validation — bad magic, version or record length in its header, or a
+	// record kept for the window that does not decode — so the window's
+	// per-frame statistics pairs are unrecoverable later, and this IS partial.
+	// The refused channel's GigeStatsRing carries the reason too. A ring that
+	// does not exist (no file on the box, `gige_trace.stats` never on, a
+	// channel that has no stats ring) does NOT set this flag: it is recorded
+	// only as that channel's GigeStatsRing.absent_reason.
+	GigeStatsRingsIncomplete bool `protobuf:"varint,12,opt,name=gige_stats_rings_incomplete,json=gigeStatsRingsIncomplete,proto3" json:"gige_stats_rings_incomplete,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *IntegrityReport) Reset() {
@@ -1251,6 +1328,20 @@ func (x *IntegrityReport) GetTelemetryIncomplete() bool {
 func (x *IntegrityReport) GetIoRecordsIncomplete() bool {
 	if x != nil {
 		return x.IoRecordsIncomplete
+	}
+	return false
+}
+
+func (x *IntegrityReport) GetGigePacketRingsIncomplete() bool {
+	if x != nil {
+		return x.GigePacketRingsIncomplete
+	}
+	return false
+}
+
+func (x *IntegrityReport) GetGigeStatsRingsIncomplete() bool {
+	if x != nil {
+		return x.GigeStatsRingsIncomplete
 	}
 	return false
 }
@@ -1413,6 +1504,412 @@ func (x *VideoSegment) GetOpenEnd() bool {
 	return false
 }
 
+// One channel's GigE `packets` trace ring, copied off the box and compacted to
+// the capture window.
+//
+// On the box the ring is
+// `/dev/shm/jettison/gige-<chan>/jon_gige_packets_<chan>.ring`, written by the
+// receiver (gige-ingress, inside the sensor harness) only while the `packets`
+// trace level is in force: a 64-byte `JGRG` header, then one 48-byte
+// record per GVSP datagram received, in a 64 MiB file overwritten oldest-first
+// under a seqlock (header layout GIGE_TRACE_RING_* in inc/gige/gige_trace.h).
+// The camera side writes no packets ring. The harvester copies the ring while
+// its writer may still be writing, keeps only the records no write could have
+// touched during the copy (the seqlock rule of PacketRing::read in
+// mods/gige/crates/gige-ingress/src/trace.rs), then keeps only those whose
+// mono_ns falls inside [t0,t1].
+//
+// mono_ns is CLOCK_MONOTONIC (the receive batch the datagram arrived in),
+// compared here against the CLOCK_BOOTTIME window in CaptureWindow. On a
+// target that never suspends the two coincide; that is a premise, not an
+// identity.
+//
+// The bundle file is itself a VALID ring, so the same readers read it: the
+// box's 64-byte header with capacity, head and begun each set to
+// record_count (every other header field as the box wrote it), then the kept
+// records oldest-first from slot 0. Every ring reader refuses a zero-capacity
+// header (RingHeader::decode), so when no record survives no file is written:
+// path and sha256 are empty, record_count is 0 and absent_reason says why.
+//
+// What it can NOT hold: datagrams the ring had already overwritten before the
+// copy began (counted over the ring's life by overwritten_before_copy;
+// window_start_lost says whether they reach into the window), datagrams the
+// writer could not place (writer_refused), and datagrams the receiver never
+// saw. A record proves a datagram ARRIVED; a missing packet id proves nothing
+// until window_start_lost and overwritten_during_copy are both clear for the
+// stretch it falls in and writer_refused is 0.
+type GigePacketRing struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "day" | "heat".
+	Channel string `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
+	// Bundle-relative, "gige/packets_<chan>.ring". Empty exactly when there is
+	// no file — then absent_reason says why.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// Size of the bundle file; 0 when absent.
+	Bytes uint64 `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	// Lowercase hex SHA-256 of the bundle file; empty when absent. The pattern
+	// admits exactly those two forms, so an absent ring validates without a
+	// placeholder digest and a present one is still held to 64 hex digits.
+	Sha256 string `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// Records in the bundle file — each one whole, decoded and inside [t0,t1].
+	// Also the file's capacity, head and begun.
+	RecordCount uint64 `protobuf:"varint,5,opt,name=record_count,json=recordCount,proto3" json:"record_count,omitempty"`
+	// Records the copy took that the writer may have overwritten while the copy
+	// was being taken (refused by the seqlock rule), discarded. It counts losses
+	// DURING the copy only; records overwritten before it began are counted
+	// nowhere.
+	OverwrittenDuringCopy uint64 `protobuf:"varint,6,opt,name=overwritten_during_copy,json=overwrittenDuringCopy,proto3" json:"overwritten_during_copy,omitempty"`
+	// Whole records whose mono_ns fell outside [t0,t1], discarded. Large values
+	// are normal: the ring holds history from before t0 and keeps filling
+	// between t1 and the copy. Not a loss.
+	OutsideWindow uint64 `protobuf:"varint,7,opt,name=outside_window,json=outsideWindow,proto3" json:"outside_window,omitempty"`
+	// The window's HEAD is missing from the packet trace: the ring had lost
+	// records before they could be kept (it had wrapped before the copy, or
+	// overwritten_during_copy is non-zero) AND the oldest record kept is later
+	// than t0. A ring that never wrapped and simply has its first datagram after
+	// t0 (the `packets` level armed mid-window, the stream started late) does
+	// NOT set it. Per-channel and informational — it is not an IntegrityReport
+	// degrade flag.
+	WindowStartLost bool `protobuf:"varint,8,opt,name=window_start_lost,json=windowStartLost,proto3" json:"window_start_lost,omitempty"`
+	// Why there is no file: no ring on the box, the `packets` level never
+	// armed, no record survived the seqlock and window filters, or the ring
+	// could not be read or validated (that last case also sets
+	// IntegrityReport.gige_packet_rings_incomplete). Empty when the file is
+	// present.
+	AbsentReason string `protobuf:"bytes,9,opt,name=absent_reason,json=absentReason,proto3" json:"absent_reason,omitempty"`
+	// Records the WRITER could not place in the ring since it was created (the
+	// ring header's refused count): datagrams the receiver took that the
+	// packet trace never held. Cumulative over the ring's life, not scoped to
+	// the window; non-zero means the trace under-counts packets somewhere, and
+	// possibly inside the window. 0 when there is no ring to read.
+	WriterRefused uint64 `protobuf:"varint,10,opt,name=writer_refused,json=writerRefused,proto3" json:"writer_refused,omitempty"`
+	// Records the ring no longer held when the copy began, because later
+	// records overwrote them (records written minus capacity; 0 before the ring
+	// first wrapped). Cumulative over the ring's life; whether any of them fell
+	// inside the window is window_start_lost. 0 when there is no ring to read.
+	OverwrittenBeforeCopy uint64 `protobuf:"varint,11,opt,name=overwritten_before_copy,json=overwrittenBeforeCopy,proto3" json:"overwritten_before_copy,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *GigePacketRing) Reset() {
+	*x = GigePacketRing{}
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GigePacketRing) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GigePacketRing) ProtoMessage() {}
+
+func (x *GigePacketRing) ProtoReflect() protoreflect.Message {
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GigePacketRing.ProtoReflect.Descriptor instead.
+func (*GigePacketRing) Descriptor() ([]byte, []int) {
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GigePacketRing) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *GigePacketRing) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *GigePacketRing) GetBytes() uint64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *GigePacketRing) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *GigePacketRing) GetRecordCount() uint64 {
+	if x != nil {
+		return x.RecordCount
+	}
+	return 0
+}
+
+func (x *GigePacketRing) GetOverwrittenDuringCopy() uint64 {
+	if x != nil {
+		return x.OverwrittenDuringCopy
+	}
+	return 0
+}
+
+func (x *GigePacketRing) GetOutsideWindow() uint64 {
+	if x != nil {
+		return x.OutsideWindow
+	}
+	return 0
+}
+
+func (x *GigePacketRing) GetWindowStartLost() bool {
+	if x != nil {
+		return x.WindowStartLost
+	}
+	return false
+}
+
+func (x *GigePacketRing) GetAbsentReason() string {
+	if x != nil {
+		return x.AbsentReason
+	}
+	return ""
+}
+
+func (x *GigePacketRing) GetWriterRefused() uint64 {
+	if x != nil {
+		return x.WriterRefused
+	}
+	return 0
+}
+
+func (x *GigePacketRing) GetOverwrittenBeforeCopy() uint64 {
+	if x != nil {
+		return x.OverwrittenBeforeCopy
+	}
+	return 0
+}
+
+// One channel's GigE `stats` trace ring, copied off the box and compacted to
+// the capture window.
+//
+// On the box the ring is
+// `/dev/shm/jettison/gige-<chan>/jon_gige_stats_<chan>.ring`, written by the
+// receiver (the sensor harness) only while `gige_trace.stats` is on, and only
+// for the day channel: the same 64-byte `JGRG` header and seqlock mechanism as
+// the packets ring (GigePacketRing), its header's record length naming the
+// kind, then one 40,272-byte `stats` record per frame the harness took — the
+// frame's MAX10 statistics and footer chunk data as received, beside the ISP
+// statistics block the harness published for that same frame (record layout
+// STATS_OFF_* in mods/gige/crates/gige-wire/src/trace.rs). The ring holds a
+// few minutes of frames, so a window longer than that loses its head before
+// the harvest copies it (window_start_lost). The harvester copies it while its
+// writer may still be writing, keeps only the records no write could have
+// touched during the copy, then keeps only those whose mono_ns falls inside
+// [t0,t1].
+//
+// mono_ns is CLOCK_MONOTONIC when the harness WROTE the record (after the
+// frame's ring publish, not its capture — the record's capture stamp is
+// another field), at the same record offset as the packet record's, compared
+// here against the CLOCK_BOOTTIME window in CaptureWindow. On a target that
+// never suspends the two coincide; that is a premise, not an identity.
+//
+// The bundle file is itself a VALID ring, laid out exactly as GigePacketRing
+// describes for the packets ring: the box's header with capacity, head and
+// begun each set to record_count, then the kept records oldest-first from
+// slot 0. When no record survives no file is written: path and sha256 are
+// empty, record_count is 0 and absent_reason says why.
+//
+// What it can NOT hold: frames whose records the ring had already overwritten
+// before the copy began (overwritten_before_copy; window_start_lost says
+// whether they reach into the window), records the writer turned away
+// (writer_refused), and frames the harness never recorded. A frame missing
+// from the bundle proves nothing until window_start_lost and
+// overwritten_during_copy are both clear for the stretch it falls in and
+// writer_refused is 0.
+type GigeStatsRing struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "day" | "heat". Only the day channel has a stats ring; heat is listed
+	// with an absent_reason, the VideoChannel rule.
+	Channel string `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
+	// Bundle-relative, "gige/stats_<chan>.ring". Empty exactly when there is
+	// no file — then absent_reason says why.
+	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// Size of the bundle file; 0 when absent.
+	Bytes uint64 `protobuf:"varint,3,opt,name=bytes,proto3" json:"bytes,omitempty"`
+	// Lowercase hex SHA-256 of the bundle file; empty when absent. The pattern
+	// admits exactly those two forms, so an absent ring validates without a
+	// placeholder digest and a present one is still held to 64 hex digits.
+	Sha256 string `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// Records in the bundle file — each one whole, decoded and inside [t0,t1].
+	// Also the file's capacity, head and begun.
+	RecordCount uint64 `protobuf:"varint,5,opt,name=record_count,json=recordCount,proto3" json:"record_count,omitempty"`
+	// Records the copy took that the writer may have overwritten while the copy
+	// was being taken (refused by the seqlock rule), discarded. It counts losses
+	// DURING the copy only; records overwritten before it began are counted
+	// nowhere.
+	OverwrittenDuringCopy uint64 `protobuf:"varint,6,opt,name=overwritten_during_copy,json=overwrittenDuringCopy,proto3" json:"overwritten_during_copy,omitempty"`
+	// Whole records whose mono_ns fell outside [t0,t1], discarded. Large values
+	// are normal: the ring holds history from before t0 and keeps filling
+	// between t1 and the copy. Not a loss.
+	OutsideWindow uint64 `protobuf:"varint,7,opt,name=outside_window,json=outsideWindow,proto3" json:"outside_window,omitempty"`
+	// The window's HEAD is missing from the stats trace: the ring had lost
+	// records before they could be kept (it had wrapped before the copy, or
+	// overwritten_during_copy is non-zero) AND the oldest record kept is later
+	// than t0. A ring that never wrapped and simply has its first record after
+	// t0 (`gige_trace.stats` turned on mid-window) does NOT set it.
+	// Per-channel and informational — it is not an IntegrityReport degrade
+	// flag.
+	WindowStartLost bool `protobuf:"varint,8,opt,name=window_start_lost,json=windowStartLost,proto3" json:"window_start_lost,omitempty"`
+	// Why there is no file: no ring on the box (heat has none; on day,
+	// `gige_trace.stats` never turned on), no record survived the seqlock and
+	// window filters, or the ring could not be read or validated (that last
+	// case also sets IntegrityReport.gige_stats_rings_incomplete). Empty when
+	// the file is present.
+	AbsentReason string `protobuf:"bytes,9,opt,name=absent_reason,json=absentReason,proto3" json:"absent_reason,omitempty"`
+	// Records the WRITER could not place in the ring since it started (the ring
+	// header's refused count), across its life, not scoped to the window. The
+	// harness's stats writer never advances this count, so it reads 0 today; a
+	// record that writer could not write is counted in its own
+	// `[[GIGE_TRACE]]` receipt (stats_failed), not here. 0 when there is no
+	// ring to read.
+	WriterRefused uint64 `protobuf:"varint,10,opt,name=writer_refused,json=writerRefused,proto3" json:"writer_refused,omitempty"`
+	// Records the ring no longer held when the copy began, because later
+	// records overwrote them (records written minus capacity; 0 before the ring
+	// first wrapped). Cumulative over the ring's life; whether any of them fell
+	// inside the window is window_start_lost. 0 when there is no ring to read.
+	OverwrittenBeforeCopy uint64 `protobuf:"varint,11,opt,name=overwritten_before_copy,json=overwrittenBeforeCopy,proto3" json:"overwritten_before_copy,omitempty"`
+	// Bytes per record slot, read from the box ring's header (40,272 for the
+	// `stats` record of the format it was written in). Lets a reader walk the
+	// file without knowing the record format; 0 when absent.
+	RecordLen     uint32 `protobuf:"varint,12,opt,name=record_len,json=recordLen,proto3" json:"record_len,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GigeStatsRing) Reset() {
+	*x = GigeStatsRing{}
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GigeStatsRing) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GigeStatsRing) ProtoMessage() {}
+
+func (x *GigeStatsRing) ProtoReflect() protoreflect.Message {
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GigeStatsRing.ProtoReflect.Descriptor instead.
+func (*GigeStatsRing) Descriptor() ([]byte, []int) {
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GigeStatsRing) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *GigeStatsRing) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *GigeStatsRing) GetBytes() uint64 {
+	if x != nil {
+		return x.Bytes
+	}
+	return 0
+}
+
+func (x *GigeStatsRing) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *GigeStatsRing) GetRecordCount() uint64 {
+	if x != nil {
+		return x.RecordCount
+	}
+	return 0
+}
+
+func (x *GigeStatsRing) GetOverwrittenDuringCopy() uint64 {
+	if x != nil {
+		return x.OverwrittenDuringCopy
+	}
+	return 0
+}
+
+func (x *GigeStatsRing) GetOutsideWindow() uint64 {
+	if x != nil {
+		return x.OutsideWindow
+	}
+	return 0
+}
+
+func (x *GigeStatsRing) GetWindowStartLost() bool {
+	if x != nil {
+		return x.WindowStartLost
+	}
+	return false
+}
+
+func (x *GigeStatsRing) GetAbsentReason() string {
+	if x != nil {
+		return x.AbsentReason
+	}
+	return ""
+}
+
+func (x *GigeStatsRing) GetWriterRefused() uint64 {
+	if x != nil {
+		return x.WriterRefused
+	}
+	return 0
+}
+
+func (x *GigeStatsRing) GetOverwrittenBeforeCopy() uint64 {
+	if x != nil {
+		return x.OverwrittenBeforeCopy
+	}
+	return 0
+}
+
+func (x *GigeStatsRing) GetRecordLen() uint32 {
+	if x != nil {
+		return x.RecordLen
+	}
+	return 0
+}
+
 // One contiguous run of records from ONE source.
 //
 // The records are carried as an opaque payload rather than as repeated nested
@@ -1423,9 +1920,10 @@ func (x *VideoSegment) GetOpenEnd() bool {
 type StreamGroup struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Kind  StreamKind             `protobuf:"varint,1,opt,name=kind,proto3,enum=jon.cvdump.StreamKind" json:"kind,omitempty"`
-	// The EXACT source, never sanitized: a redis stream key for kinds 1-3
-	// (e.g. "logs:can:0x500", "logs:rotary:uart:tx"), a TSDB table name for
-	// kind 4 (e.g. "state_logs").
+	// The EXACT source, never sanitized: a redis stream key for every
+	// redis-stream kind (e.g. "logs:can:0x500", "logs:rotary:uart:tx",
+	// "logs:gige:day"), a TSDB table name for STREAM_KIND_TSDB_TABLE (e.g.
+	// "state_logs"). Which kinds are which: see StreamKind.
 	Source string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
 	// How to turn payload back into records. See ArchiveCodec.
 	Codec ArchiveCodec `protobuf:"varint,3,opt,name=codec,proto3,enum=jon.cvdump.ArchiveCodec" json:"codec,omitempty"`
@@ -1443,12 +1941,13 @@ type StreamGroup struct {
 	// record_count records of the window and the rest were dropped. Also listed
 	// in IntegrityReport.truncated_sources.
 	Truncated bool `protobuf:"varint,7,opt,name=truncated,proto3" json:"truncated,omitempty"`
-	// TSDB-table groups only (kind 4): the table's columns in ordinal order, so
-	// the rows parse offline with no PostgreSQL catalog. Empty for redis-stream
-	// kinds.
+	// STREAM_KIND_TSDB_TABLE groups only: the table's columns in ordinal order,
+	// so the rows parse offline with no PostgreSQL catalog. Empty for every
+	// redis-stream kind.
 	Columns []*ColumnDef `protobuf:"bytes,8,rep,name=columns,proto3" json:"columns,omitempty"`
-	// The records. Decode with codec, then parse as RedisStreamRecords for kinds
-	// 1-3 or TableRows for kind 4.
+	// The records. Decode with codec, then parse as TableRows for
+	// STREAM_KIND_TSDB_TABLE and as RedisStreamRecords for every redis-stream
+	// kind.
 	Payload       []byte `protobuf:"bytes,9,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1456,7 +1955,7 @@ type StreamGroup struct {
 
 func (x *StreamGroup) Reset() {
 	*x = StreamGroup{}
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[10]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1468,7 +1967,7 @@ func (x *StreamGroup) String() string {
 func (*StreamGroup) ProtoMessage() {}
 
 func (x *StreamGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[10]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1481,7 +1980,7 @@ func (x *StreamGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamGroup.ProtoReflect.Descriptor instead.
 func (*StreamGroup) Descriptor() ([]byte, []int) {
-	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{10}
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StreamGroup) GetKind() StreamKind {
@@ -1558,7 +2057,7 @@ type ColumnDef struct {
 
 func (x *ColumnDef) Reset() {
 	*x = ColumnDef{}
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[11]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1570,7 +2069,7 @@ func (x *ColumnDef) String() string {
 func (*ColumnDef) ProtoMessage() {}
 
 func (x *ColumnDef) ProtoReflect() protoreflect.Message {
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[11]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1583,7 +2082,7 @@ func (x *ColumnDef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ColumnDef.ProtoReflect.Descriptor instead.
 func (*ColumnDef) Descriptor() ([]byte, []int) {
-	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{11}
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ColumnDef) GetName() string {
@@ -1600,7 +2099,8 @@ func (x *ColumnDef) GetType() string {
 	return ""
 }
 
-// The decoded payload of a redis-stream group (StreamKind 1-3).
+// The decoded payload of a group of any redis-stream kind (every StreamKind
+// except STREAM_KIND_TSDB_TABLE).
 type RedisStreamRecords struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Records       []*RedisStreamRecord   `protobuf:"bytes,1,rep,name=records,proto3" json:"records,omitempty"`
@@ -1610,7 +2110,7 @@ type RedisStreamRecords struct {
 
 func (x *RedisStreamRecords) Reset() {
 	*x = RedisStreamRecords{}
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[12]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1622,7 +2122,7 @@ func (x *RedisStreamRecords) String() string {
 func (*RedisStreamRecords) ProtoMessage() {}
 
 func (x *RedisStreamRecords) ProtoReflect() protoreflect.Message {
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[12]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1635,7 +2135,7 @@ func (x *RedisStreamRecords) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RedisStreamRecords.ProtoReflect.Descriptor instead.
 func (*RedisStreamRecords) Descriptor() ([]byte, []int) {
-	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{12}
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RedisStreamRecords) GetRecords() []*RedisStreamRecord {
@@ -1661,7 +2161,7 @@ type RedisStreamRecord struct {
 
 func (x *RedisStreamRecord) Reset() {
 	*x = RedisStreamRecord{}
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[13]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1673,7 +2173,7 @@ func (x *RedisStreamRecord) String() string {
 func (*RedisStreamRecord) ProtoMessage() {}
 
 func (x *RedisStreamRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[13]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1686,7 +2186,7 @@ func (x *RedisStreamRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RedisStreamRecord.ProtoReflect.Descriptor instead.
 func (*RedisStreamRecord) Descriptor() ([]byte, []int) {
-	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{13}
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RedisStreamRecord) GetId() string {
@@ -1704,8 +2204,8 @@ func (x *RedisStreamRecord) GetFields() []*RedisStreamField {
 }
 
 // A single redis field. value is RAW BYTES and is never UTF-8 decoded: the
-// io-record streams carry binary payloads (DATCON frames, CAN blobs) that a
-// text round-trip would destroy.
+// io-record streams carry binary payloads (DATCON frames, CAN blobs, GigE
+// trace records) that a text round-trip would destroy.
 type RedisStreamField struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -1716,7 +2216,7 @@ type RedisStreamField struct {
 
 func (x *RedisStreamField) Reset() {
 	*x = RedisStreamField{}
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[14]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1728,7 +2228,7 @@ func (x *RedisStreamField) String() string {
 func (*RedisStreamField) ProtoMessage() {}
 
 func (x *RedisStreamField) ProtoReflect() protoreflect.Message {
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[14]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1741,7 +2241,7 @@ func (x *RedisStreamField) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RedisStreamField.ProtoReflect.Descriptor instead.
 func (*RedisStreamField) Descriptor() ([]byte, []int) {
-	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{14}
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RedisStreamField) GetName() string {
@@ -1758,7 +2258,7 @@ func (x *RedisStreamField) GetValue() []byte {
 	return nil
 }
 
-// The decoded payload of a TSDB-table group (StreamKind 4).
+// The decoded payload of a STREAM_KIND_TSDB_TABLE group.
 type TableRows struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// One row per entry, each the UTF-8 text of PostgreSQL row_to_json(t) — so a
@@ -1772,7 +2272,7 @@ type TableRows struct {
 
 func (x *TableRows) Reset() {
 	*x = TableRows{}
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[15]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1784,7 +2284,7 @@ func (x *TableRows) String() string {
 func (*TableRows) ProtoMessage() {}
 
 func (x *TableRows) ProtoReflect() protoreflect.Message {
-	mi := &file_jon_cv_dump_archive_proto_msgTypes[15]
+	mi := &file_jon_cv_dump_archive_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1797,7 +2297,7 @@ func (x *TableRows) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TableRows.ProtoReflect.Descriptor instead.
 func (*TableRows) Descriptor() ([]byte, []int) {
-	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{15}
+	return file_jon_cv_dump_archive_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TableRows) GetRows() [][]byte {
@@ -1812,7 +2312,7 @@ var File_jon_cv_dump_archive_proto protoreflect.FileDescriptor
 const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\n" +
 	"\x19jon_cv_dump_archive.proto\x12\n" +
-	"jon.cvdump\x1a\x1bbuf/validate/validate.proto\"\x91\x04\n" +
+	"jon.cvdump\x1a\x1bbuf/validate/validate.proto\"\x9e\x05\n" +
 	"\rCvDumpArchive\x12:\n" +
 	"\aversion\x18\x01 \x01(\x0e2 .jon.cvdump.ArchiveFormatVersionR\aversion\x12\x17\n" +
 	"\x02id\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10$R\x02id\x12!\n" +
@@ -1827,7 +2327,9 @@ const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\x05video\x18\t \x03(\v2\x18.jon.cvdump.VideoChannelR\x05video\x121\n" +
 	"\astreams\x18\n" +
 	" \x03(\v2\x17.jon.cvdump.StreamGroupR\astreams\x12-\n" +
-	"\x05shots\x18\v \x03(\v2\x17.jon.cvdump.ShotCaptureR\x05shots\"\xcc\x02\n" +
+	"\x05shots\x18\v \x03(\v2\x17.jon.cvdump.ShotCaptureR\x05shots\x12F\n" +
+	"\x11gige_packet_rings\x18\f \x03(\v2\x1a.jon.cvdump.GigePacketRingR\x0fgigePacketRings\x12C\n" +
+	"\x10gige_stats_rings\x18\r \x03(\v2\x19.jon.cvdump.GigeStatsRingR\x0egigeStatsRings\"\xcc\x02\n" +
 	"\tShotPlane\x12\x1d\n" +
 	"\x05plane\x18\x01 \x01(\rB\a\xbaH\x04*\x02\x18\x03R\x05plane\x12\x10\n" +
 	"\x03tag\x18\x02 \x01(\rR\x03tag\x12#\n" +
@@ -1885,7 +2387,7 @@ const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\tfps_limit\x18\x04 \x01(\rR\bfpsLimit\x12\x1d\n" +
 	"\n" +
 	"sensor_fps\x18\x05 \x01(\rR\tsensorFps\x12!\n" +
-	"\fcrop_margins\x18\x06 \x01(\rR\vcropMargins\"\xf0\x03\n" +
+	"\fcrop_margins\x18\x06 \x01(\rR\vcropMargins\"\xf0\x04\n" +
 	"\x0fIntegrityReport\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.jon.cvdump.ArchiveStatusR\x06status\x12'\n" +
 	"\x0flapped_segments\x18\x02 \x01(\rR\x0elappedSegments\x12*\n" +
@@ -1897,7 +2399,9 @@ const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\x11truncated_sources\x18\b \x03(\tR\x10truncatedSources\x121\n" +
 	"\x14telemetry_incomplete\x18\t \x01(\bR\x13telemetryIncomplete\x122\n" +
 	"\x15io_records_incomplete\x18\n" +
-	" \x01(\bR\x13ioRecordsIncomplete\"^\n" +
+	" \x01(\bR\x13ioRecordsIncomplete\x12?\n" +
+	"\x1cgige_packet_rings_incomplete\x18\v \x01(\bR\x19gigePacketRingsIncomplete\x12=\n" +
+	"\x1bgige_stats_rings_incomplete\x18\f \x01(\bR\x18gigeStatsRingsIncomplete\"^\n" +
 	"\fVideoChannel\x12\x18\n" +
 	"\achannel\x18\x01 \x01(\tR\achannel\x124\n" +
 	"\bsegments\x18\x02 \x03(\v2\x18.jon.cvdump.VideoSegmentR\bsegments\"\xc3\x01\n" +
@@ -1908,7 +2412,35 @@ const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\x06sha256\x18\x04 \x01(\tB\b\xbaH\x05r\x03\x98\x01@R\x06sha256\x12\x19\n" +
 	"\bstart_ns\x18\x05 \x01(\x03R\astartNs\x12\x15\n" +
 	"\x06end_ns\x18\x06 \x01(\x03R\x05endNs\x12\x19\n" +
-	"\bopen_end\x18\a \x01(\bR\aopenEnd\"\xec\x02\n" +
+	"\bopen_end\x18\a \x01(\bR\aopenEnd\"\xca\x03\n" +
+	"\x0eGigePacketRing\x12*\n" +
+	"\achannel\x18\x01 \x01(\tB\x10\xbaH\rr\vR\x03dayR\x04heatR\achannel\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x14\n" +
+	"\x05bytes\x18\x03 \x01(\x04R\x05bytes\x120\n" +
+	"\x06sha256\x18\x04 \x01(\tB\x18\xbaH\x15r\x132\x11^([0-9a-f]{64})?$R\x06sha256\x12!\n" +
+	"\frecord_count\x18\x05 \x01(\x04R\vrecordCount\x126\n" +
+	"\x17overwritten_during_copy\x18\x06 \x01(\x04R\x15overwrittenDuringCopy\x12%\n" +
+	"\x0eoutside_window\x18\a \x01(\x04R\routsideWindow\x12*\n" +
+	"\x11window_start_lost\x18\b \x01(\bR\x0fwindowStartLost\x12#\n" +
+	"\rabsent_reason\x18\t \x01(\tR\fabsentReason\x12%\n" +
+	"\x0ewriter_refused\x18\n" +
+	" \x01(\x04R\rwriterRefused\x126\n" +
+	"\x17overwritten_before_copy\x18\v \x01(\x04R\x15overwrittenBeforeCopy\"\xe8\x03\n" +
+	"\rGigeStatsRing\x12*\n" +
+	"\achannel\x18\x01 \x01(\tB\x10\xbaH\rr\vR\x03dayR\x04heatR\achannel\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x14\n" +
+	"\x05bytes\x18\x03 \x01(\x04R\x05bytes\x120\n" +
+	"\x06sha256\x18\x04 \x01(\tB\x18\xbaH\x15r\x132\x11^([0-9a-f]{64})?$R\x06sha256\x12!\n" +
+	"\frecord_count\x18\x05 \x01(\x04R\vrecordCount\x126\n" +
+	"\x17overwritten_during_copy\x18\x06 \x01(\x04R\x15overwrittenDuringCopy\x12%\n" +
+	"\x0eoutside_window\x18\a \x01(\x04R\routsideWindow\x12*\n" +
+	"\x11window_start_lost\x18\b \x01(\bR\x0fwindowStartLost\x12#\n" +
+	"\rabsent_reason\x18\t \x01(\tR\fabsentReason\x12%\n" +
+	"\x0ewriter_refused\x18\n" +
+	" \x01(\x04R\rwriterRefused\x126\n" +
+	"\x17overwritten_before_copy\x18\v \x01(\x04R\x15overwrittenBeforeCopy\x12\x1d\n" +
+	"\n" +
+	"record_len\x18\f \x01(\rR\trecordLen\"\xec\x02\n" +
 	"\vStreamGroup\x12*\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x16.jon.cvdump.StreamKindR\x04kind\x12\x1f\n" +
 	"\x06source\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x06source\x12.\n" +
@@ -1937,7 +2469,7 @@ const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\x19ARCHIVE_FORMAT_VERSION_V3\x10\x03*E\n" +
 	"\fArchiveCodec\x12\x1d\n" +
 	"\x19ARCHIVE_CODEC_UNSPECIFIED\x10\x00\x12\x16\n" +
-	"\x12ARCHIVE_CODEC_NONE\x10\x01*\xb2\x01\n" +
+	"\x12ARCHIVE_CODEC_NONE\x10\x01*\xc8\x01\n" +
 	"\n" +
 	"StreamKind\x12\x1b\n" +
 	"\x17STREAM_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
@@ -1945,7 +2477,8 @@ const file_jon_cv_dump_archive_proto_rawDesc = "" +
 	"\x17STREAM_KIND_ROTARY_UART\x10\x02\x12\x19\n" +
 	"\x15STREAM_KIND_FRAME_TAP\x10\x03\x12\x1a\n" +
 	"\x16STREAM_KIND_TSDB_TABLE\x10\x04\x12\x1e\n" +
-	"\x1aSTREAM_KIND_MOTION_HISTORY\x10\x05*\x83\x01\n" +
+	"\x1aSTREAM_KIND_MOTION_HISTORY\x10\x05\x12\x14\n" +
+	"\x10STREAM_KIND_GIGE\x10\x06*\x83\x01\n" +
 	"\rArchiveStatus\x12\x1e\n" +
 	"\x1aARCHIVE_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17ARCHIVE_STATUS_COMPLETE\x10\x01\x12\x1a\n" +
@@ -1972,7 +2505,7 @@ func file_jon_cv_dump_archive_proto_rawDescGZIP() []byte {
 }
 
 var file_jon_cv_dump_archive_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_jon_cv_dump_archive_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_jon_cv_dump_archive_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_jon_cv_dump_archive_proto_goTypes = []any{
 	(ArchiveFormatVersion)(0),  // 0: jon.cvdump.ArchiveFormatVersion
 	(ArchiveCodec)(0),          // 1: jon.cvdump.ArchiveCodec
@@ -1989,12 +2522,14 @@ var file_jon_cv_dump_archive_proto_goTypes = []any{
 	(*IntegrityReport)(nil),    // 12: jon.cvdump.IntegrityReport
 	(*VideoChannel)(nil),       // 13: jon.cvdump.VideoChannel
 	(*VideoSegment)(nil),       // 14: jon.cvdump.VideoSegment
-	(*StreamGroup)(nil),        // 15: jon.cvdump.StreamGroup
-	(*ColumnDef)(nil),          // 16: jon.cvdump.ColumnDef
-	(*RedisStreamRecords)(nil), // 17: jon.cvdump.RedisStreamRecords
-	(*RedisStreamRecord)(nil),  // 18: jon.cvdump.RedisStreamRecord
-	(*RedisStreamField)(nil),   // 19: jon.cvdump.RedisStreamField
-	(*TableRows)(nil),          // 20: jon.cvdump.TableRows
+	(*GigePacketRing)(nil),     // 15: jon.cvdump.GigePacketRing
+	(*GigeStatsRing)(nil),      // 16: jon.cvdump.GigeStatsRing
+	(*StreamGroup)(nil),        // 17: jon.cvdump.StreamGroup
+	(*ColumnDef)(nil),          // 18: jon.cvdump.ColumnDef
+	(*RedisStreamRecords)(nil), // 19: jon.cvdump.RedisStreamRecords
+	(*RedisStreamRecord)(nil),  // 20: jon.cvdump.RedisStreamRecord
+	(*RedisStreamField)(nil),   // 21: jon.cvdump.RedisStreamField
+	(*TableRows)(nil),          // 22: jon.cvdump.TableRows
 }
 var file_jon_cv_dump_archive_proto_depIdxs = []int32{
 	0,  // 0: jon.cvdump.CvDumpArchive.version:type_name -> jon.cvdump.ArchiveFormatVersion
@@ -2003,23 +2538,25 @@ var file_jon_cv_dump_archive_proto_depIdxs = []int32{
 	9,  // 3: jon.cvdump.CvDumpArchive.machine:type_name -> jon.cvdump.MachineIdentity
 	12, // 4: jon.cvdump.CvDumpArchive.integrity:type_name -> jon.cvdump.IntegrityReport
 	13, // 5: jon.cvdump.CvDumpArchive.video:type_name -> jon.cvdump.VideoChannel
-	15, // 6: jon.cvdump.CvDumpArchive.streams:type_name -> jon.cvdump.StreamGroup
+	17, // 6: jon.cvdump.CvDumpArchive.streams:type_name -> jon.cvdump.StreamGroup
 	7,  // 7: jon.cvdump.CvDumpArchive.shots:type_name -> jon.cvdump.ShotCapture
-	6,  // 8: jon.cvdump.ShotCapture.planes:type_name -> jon.cvdump.ShotPlane
-	10, // 9: jon.cvdump.MachineIdentity.deploy:type_name -> jon.cvdump.DeployFingerprint
-	11, // 10: jon.cvdump.MachineIdentity.channels_config:type_name -> jon.cvdump.ChannelConfig
-	3,  // 11: jon.cvdump.IntegrityReport.status:type_name -> jon.cvdump.ArchiveStatus
-	14, // 12: jon.cvdump.VideoChannel.segments:type_name -> jon.cvdump.VideoSegment
-	2,  // 13: jon.cvdump.StreamGroup.kind:type_name -> jon.cvdump.StreamKind
-	1,  // 14: jon.cvdump.StreamGroup.codec:type_name -> jon.cvdump.ArchiveCodec
-	16, // 15: jon.cvdump.StreamGroup.columns:type_name -> jon.cvdump.ColumnDef
-	18, // 16: jon.cvdump.RedisStreamRecords.records:type_name -> jon.cvdump.RedisStreamRecord
-	19, // 17: jon.cvdump.RedisStreamRecord.fields:type_name -> jon.cvdump.RedisStreamField
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	15, // 8: jon.cvdump.CvDumpArchive.gige_packet_rings:type_name -> jon.cvdump.GigePacketRing
+	16, // 9: jon.cvdump.CvDumpArchive.gige_stats_rings:type_name -> jon.cvdump.GigeStatsRing
+	6,  // 10: jon.cvdump.ShotCapture.planes:type_name -> jon.cvdump.ShotPlane
+	10, // 11: jon.cvdump.MachineIdentity.deploy:type_name -> jon.cvdump.DeployFingerprint
+	11, // 12: jon.cvdump.MachineIdentity.channels_config:type_name -> jon.cvdump.ChannelConfig
+	3,  // 13: jon.cvdump.IntegrityReport.status:type_name -> jon.cvdump.ArchiveStatus
+	14, // 14: jon.cvdump.VideoChannel.segments:type_name -> jon.cvdump.VideoSegment
+	2,  // 15: jon.cvdump.StreamGroup.kind:type_name -> jon.cvdump.StreamKind
+	1,  // 16: jon.cvdump.StreamGroup.codec:type_name -> jon.cvdump.ArchiveCodec
+	18, // 17: jon.cvdump.StreamGroup.columns:type_name -> jon.cvdump.ColumnDef
+	20, // 18: jon.cvdump.RedisStreamRecords.records:type_name -> jon.cvdump.RedisStreamRecord
+	21, // 19: jon.cvdump.RedisStreamRecord.fields:type_name -> jon.cvdump.RedisStreamField
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_jon_cv_dump_archive_proto_init() }
@@ -2034,7 +2571,7 @@ func file_jon_cv_dump_archive_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jon_cv_dump_archive_proto_rawDesc), len(file_jon_cv_dump_archive_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
